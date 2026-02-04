@@ -12,7 +12,7 @@ import (
 
 	"kb-platform-gateway/internal/api/routes"
 	"kb-platform-gateway/internal/config"
-	"kb-platform-gateway/pkg/sse"
+	"kb-platform-gateway/internal/repository"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -37,15 +37,18 @@ func main() {
 	// Create Gin router
 	router := gin.New()
 
-	// Setup SSE hub
-	sseHub := sse.NewHub()
-	go sseHub.Run()
+	// Initialize repository
+	repo, err := repository.NewPostgresRepository(&cfg.Database)
+	if err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+	defer repo.Close()
 
 	// Setup middleware
 	setupMiddleware(router, cfg, logger)
 
 	// Setup routes
-	routes.SetupRoutes(router, cfg, sseHub, logger)
+	routes.SetupRoutes(router, cfg, repo, logger)
 
 	// Create HTTP server
 	srv := &http.Server{

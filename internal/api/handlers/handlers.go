@@ -3,62 +3,51 @@ package handlers
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
-	"kb-platform-gateway/internal/auth"
 	"kb-platform-gateway/internal/config"
 	"kb-platform-gateway/internal/models"
+	"kb-platform-gateway/internal/repository"
 	"kb-platform-gateway/internal/services"
-	"kb-platform-gateway/pkg/sse"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
 type Handlers struct {
-	JWTManager *auth.Manager
 	CoreClient *services.PythonCoreClient
-	SSEHub     *sse.Hub
+	S3Client   *services.S3Client
+	Temporal   *services.TemporalClient
+	Repository repository.Repository
 	Logger     zerolog.Logger
 }
 
-func NewHandlers(cfg *config.Config, sseHub *sse.Hub, logger zerolog.Logger) *Handlers {
-	return &Handlers{
-		JWTManager: auth.NewManager(cfg.JWT.Secret, cfg.JWT.Expiration),
-		CoreClient: services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort),
-		SSEHub:     sseHub,
-		Logger:     logger,
+func NewHandlers(cfg *config.Config, repo repository.Repository, logger zerolog.Logger) (*Handlers, error) {
+	s3Client, err := services.NewS3Client(&cfg.S3)
+	if err != nil {
+		return nil, err
 	}
+
+	temporalClient, err := services.NewTemporalClient(&cfg.Temporal)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Handlers{
+		CoreClient: services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort),
+		S3Client:   s3Client,
+		Temporal:   temporalClient,
+		Repository: repo,
+		Logger:     logger,
+	}, nil
 }
 
-func (h *Handlers) Login(c *gin.Context) {
-	var req models.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{
-			Error: models.ErrorDetail{
-				Code:    "VALIDATION_ERROR",
-				Message: "Invalid request format",
-			},
-		})
-		return
+func (h *Handlers) Close() {
+	if h.Temporal != nil {
+		h.Temporal.Close()
 	}
-
-	token, expiresAt, err := h.JWTManager.GenerateToken(req.Username)
-	if err != nil {
-		h.Logger.Error().Err(err).Msg("Failed to generate token")
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: models.ErrorDetail{
-				Code:    "INTERNAL_ERROR",
-				Message: "Failed to generate token",
-			},
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, models.LoginResponse{
-		Token:     token,
-		ExpiresAt: expiresAt,
-	})
 }
 
 func (h *Handlers) Health(c *gin.Context) {
@@ -96,30 +85,98 @@ func (h *Handlers) UploadDocument(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, models.Document{
-		ID:        generateUUID(),
-		UploadURL: "https://s3.amazonaws.com/bucket/presigned-url",
-		S3Key:     "documents/" + generateUUID() + "/" + file.Filename,
+	documentID := generateUUID()
+	s3Key := "documents/" + documentID + "/" + file.Filename
+
+	uploadURL, err := h.S3Client.GeneratePresignedUploadURL(c.Request.Context(), s3Key, 15*time.Minute)
+	if err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to generate presigned URL")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to generate upload URL",
+			},
+		})
+		return
+	}
+
+	doc := &models.Document{
+		ID:        documentID,
+		S3Key:     s3Key,
 		Filename:  file.Filename,
 		FileSize:  file.Size,
 		Status:    "pending",
 		CreatedAt: time.Now(),
+	}
+
+	if err := h.Repository.CreateDocument(c.Request.Context(), doc); err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to save document to database")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to save document",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.Document{
+		ID:        doc.ID,
+		UploadURL: uploadURL,
+		S3Key:     doc.S3Key,
+		Filename:  doc.Filename,
+		FileSize:  doc.FileSize,
+		Status:    doc.Status,
+		CreatedAt: doc.CreatedAt,
 	})
 }
 
 func (h *Handlers) ListDocuments(c *gin.Context) {
+	limit := 50
+	offset := 0
+	statusFilter := c.Query("status")
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	documents, total, err := h.Repository.ListDocuments(c.Request.Context(), limit, offset, statusFilter)
+	if err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to list documents")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to list documents",
+			},
+		})
+		return
+	}
+
+	docList := make([]models.Document, len(documents))
+	for i, doc := range documents {
+		docList[i] = *doc
+	}
+
 	c.JSON(http.StatusOK, models.DocumentListResponse{
-		Documents: []models.Document{},
-		Total:     0,
-		Limit:     50,
-		Offset:    0,
+		Documents: docList,
+		Total:     total,
+		Limit:     limit,
+		Offset:    offset,
 	})
 }
 
 func (h *Handlers) GetDocument(c *gin.Context) {
 	documentID := c.Param("id")
 
-	doc, err := h.CoreClient.GetDocument(documentID)
+	doc, err := h.Repository.GetDocument(c.Request.Context(), documentID)
 	if err != nil {
 		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to get document")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
@@ -147,7 +204,29 @@ func (h *Handlers) GetDocument(c *gin.Context) {
 func (h *Handlers) DeleteDocument(c *gin.Context) {
 	documentID := c.Param("id")
 
+	doc, err := h.Repository.GetDocument(c.Request.Context(), documentID)
+	if err != nil {
+		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to get document")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to get document",
+			},
+		})
+		return
+	}
+
+	if doc != nil && doc.S3Key != "" {
+		if err := h.S3Client.DeleteObject(c.Request.Context(), doc.S3Key); err != nil {
+			h.Logger.Error().Err(err).Str("s3_key", doc.S3Key).Msg("Failed to delete from S3")
+		}
+	}
+
 	if err := h.CoreClient.DeleteDocumentVectors(documentID); err != nil {
+		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to delete vectors")
+	}
+
+	if err := h.Repository.DeleteDocument(c.Request.Context(), documentID); err != nil {
 		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to delete document")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error: models.ErrorDetail{
@@ -164,6 +243,28 @@ func (h *Handlers) DeleteDocument(c *gin.Context) {
 func (h *Handlers) CompleteUpload(c *gin.Context) {
 	documentID := c.Param("id")
 
+	if _, err := h.Temporal.StartUploadWorkflow(c.Request.Context(), documentID, ""); err != nil {
+		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to start upload workflow")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to start indexing",
+			},
+		})
+		return
+	}
+
+	if err := h.Repository.UpdateDocumentStatus(c.Request.Context(), documentID, "indexing", ""); err != nil {
+		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to update document status")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to update status",
+			},
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, models.Document{
 		ID:     documentID,
 		Status: "indexing",
@@ -171,26 +272,107 @@ func (h *Handlers) CompleteUpload(c *gin.Context) {
 }
 
 func (h *Handlers) ListConversations(c *gin.Context) {
+	limit := 50
+	offset := 0
+
+	userID := c.GetString("username")
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	conversations, total, err := h.Repository.ListConversations(c.Request.Context(), userID, limit, offset)
+	if err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to list conversations")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to list conversations",
+			},
+		})
+		return
+	}
+
+	convList := make([]models.Conversation, len(conversations))
+	for i, conv := range conversations {
+		convList[i] = *conv
+	}
+
 	c.JSON(http.StatusOK, models.ConversationListResponse{
-		Conversations: []models.Conversation{},
-		Total:         0,
-		Limit:         50,
-		Offset:        0,
+		Conversations: convList,
+		Total:         total,
+		Limit:         limit,
+		Offset:        offset,
 	})
 }
 
 func (h *Handlers) CreateConversation(c *gin.Context) {
 	now := time.Now()
-	c.JSON(http.StatusCreated, models.Conversation{
+
+	conv := &models.Conversation{
 		ID:        generateUUID(),
 		CreatedAt: now,
 		UpdatedAt: now,
-	})
+	}
+
+	if err := h.Repository.CreateConversation(c.Request.Context(), conv); err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to create conversation")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to create conversation",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, conv)
 }
 
 func (h *Handlers) GetConversationMessages(c *gin.Context) {
+	conversationID := c.Param("id")
+	limit := 50
+	offset := 0
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	messages, err := h.Repository.GetMessagesByConversationID(c.Request.Context(), conversationID, limit, offset)
+	if err != nil {
+		h.Logger.Error().Err(err).Str("conversation_id", conversationID).Msg("Failed to get messages")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to get messages",
+			},
+		})
+		return
+	}
+
+	msgList := make([]models.Message, len(messages))
+	for i, msg := range messages {
+		msgList[i] = *msg
+	}
+
 	c.JSON(http.StatusOK, models.MessageListResponse{
-		Messages: []models.Message{},
+		Messages: msgList,
 	})
 }
 
@@ -237,5 +419,5 @@ func (h *Handlers) Query(c *gin.Context) {
 }
 
 func generateUUID() string {
-	return "550e8400-e29b-41d4-a716-446655440000"
+	return uuid.New().String()
 }
