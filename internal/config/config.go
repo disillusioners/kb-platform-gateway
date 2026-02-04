@@ -4,13 +4,17 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
 	Server   ServerConfig
-	JWT      JWTConfig
 	Services ServicesConfig
+	Database DatabaseConfig
 	S3       S3Config
+	Temporal TemporalConfig
+	JWT      JWTConfig
 }
 
 type ServerConfig struct {
@@ -19,51 +23,75 @@ type ServerConfig struct {
 	Mode string
 }
 
-type JWTConfig struct {
-	Secret     string
-	Expiration time.Duration
+type DatabaseConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	Database string
+	SSLMode  string
+}
+
+type S3Config struct {
+	Bucket          string
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey string
+	Endpoint        string // Optional for S3-compatible services
+}
+
+type TemporalConfig struct {
+	Host      string
+	Port      int
+	Namespace string
 }
 
 type ServicesConfig struct {
 	PythonCoreHost string
 	PythonCorePort int
-	TemporalHost   string
-	TemporalPort   int
 }
 
-type S3Config struct {
-	Endpoint  string
-	Bucket    string
-	Region    string
-	AccessKey string
-	SecretKey string
-	UseHTTPS  bool
+type JWTConfig struct {
+	Secret     string
+	Expiration time.Duration
 }
 
 func Load() (*Config, error) {
+	_ = godotenv.Load()
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
 			Port: getEnvAsInt("SERVER_PORT", 8080),
 			Mode: getEnv("GIN_MODE", "debug"),
 		},
-		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "your-secret-key"),
-			Expiration: getEnvAsDuration("JWT_EXPIRATION", 24*time.Hour),
-		},
 		Services: ServicesConfig{
 			PythonCoreHost: getEnv("PYTHON_CORE_HOST", "python-llama-core"),
 			PythonCorePort: getEnvAsInt("PYTHON_CORE_PORT", 8000),
-			TemporalHost:   getEnv("TEMPORAL_HOST", "temporal"),
-			TemporalPort:   getEnvAsInt("TEMPORAL_PORT", 7233),
+		},
+		Database: DatabaseConfig{
+			Host:     getEnv("DB_HOST", "postgres"),
+			Port:     getEnvAsInt("DB_PORT", 5432),
+			User:     getEnv("DB_USER", "kb_user"),
+			Password: getEnv("DB_PASSWORD", "kb_password"),
+			Database: getEnv("DB_NAME", "kb_platform"),
+			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
 		S3: S3Config{
-			Endpoint:  getEnv("S3_ENDPOINT", "s3.amazonaws.com"),
-			Bucket:    getEnv("S3_BUCKET", "kb-documents"),
-			Region:    getEnv("S3_REGION", "us-east-1"),
-			AccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
-			SecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
-			UseHTTPS:  getEnvAsBool("S3_USE_HTTPS", true),
+			Bucket:          getEnv("S3_BUCKET", "kb-documents"),
+			Region:          getEnv("S3_REGION", "us-east-1"),
+			AccessKeyID:     getEnv("S3_ACCESS_KEY_ID", ""),
+			SecretAccessKey: getEnv("S3_SECRET_ACCESS_KEY", ""),
+			Endpoint:        getEnv("S3_ENDPOINT", ""),
+		},
+		Temporal: TemporalConfig{
+			Host:      getEnv("TEMPORAL_HOST", "temporal"),
+			Port:      getEnvAsInt("TEMPORAL_PORT", 7233),
+			Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
+		},
+		JWT: JWTConfig{
+			Secret:     getEnv("JWT_SECRET", "kb-platform-secret-key"),
+			Expiration: getEnvAsDuration("JWT_EXPIRATION", 24*time.Hour),
 		},
 	}
 

@@ -4,23 +4,23 @@ import (
 	"kb-platform-gateway/internal/api/handlers"
 	"kb-platform-gateway/internal/api/middleware"
 	"kb-platform-gateway/internal/config"
-	"kb-platform-gateway/pkg/sse"
+	"kb-platform-gateway/internal/repository"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
-func SetupRoutes(router *gin.Engine, cfg *config.Config, sseHub *sse.Hub, logger zerolog.Logger) {
-	h := handlers.NewHandlers(cfg, sseHub, logger)
-	authMiddleware := middleware.AuthMiddleware(h.JWTManager)
+func SetupRoutes(router *gin.Engine, cfg *config.Config, repo repository.Repository, logger zerolog.Logger) {
+	h, err := handlers.NewHandlers(cfg, repo, logger)
+	if err != nil {
+		panic(err)
+	}
+	defer h.Close()
+
+	authMiddleware := middleware.AuthMiddleware()
 
 	api := router.Group("/api/v1")
 	{
-		auth := api.Group("/auth")
-		{
-			auth.POST("/login", h.Login)
-		}
-
 		docs := api.Group("/documents")
 		docs.Use(authMiddleware)
 		{
