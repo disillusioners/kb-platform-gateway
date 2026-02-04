@@ -10,6 +10,7 @@ type Config struct {
 	Server   ServerConfig
 	JWT      JWTConfig
 	Services ServicesConfig
+	S3       S3Config
 }
 
 type ServerConfig struct {
@@ -30,6 +31,15 @@ type ServicesConfig struct {
 	TemporalPort   int
 }
 
+type S3Config struct {
+	Endpoint  string
+	Bucket    string
+	Region    string
+	AccessKey string
+	SecretKey string
+	UseHTTPS  bool
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		Server: ServerConfig{
@@ -46,6 +56,14 @@ func Load() (*Config, error) {
 			PythonCorePort: getEnvAsInt("PYTHON_CORE_PORT", 8000),
 			TemporalHost:   getEnv("TEMPORAL_HOST", "temporal"),
 			TemporalPort:   getEnvAsInt("TEMPORAL_PORT", 7233),
+		},
+		S3: S3Config{
+			Endpoint:  getEnv("S3_ENDPOINT", "s3.amazonaws.com"),
+			Bucket:    getEnv("S3_BUCKET", "kb-documents"),
+			Region:    getEnv("S3_REGION", "us-east-1"),
+			AccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
+			SecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+			UseHTTPS:  getEnvAsBool("S3_USE_HTTPS", true),
 		},
 	}
 
@@ -73,6 +91,13 @@ func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
 		}
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return value == "true" || value == "1" || value == "yes"
 	}
 	return defaultValue
 }
