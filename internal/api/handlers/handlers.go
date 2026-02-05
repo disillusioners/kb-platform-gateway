@@ -105,7 +105,7 @@ func (h *Handlers) UploadDocument(c *gin.Context) {
 		S3Key:     s3Key,
 		Filename:  file.Filename,
 		FileSize:  file.Size,
-		Status:    "uploading",
+		Status:    "pending",
 		CreatedAt: time.Now(),
 	}
 
@@ -270,7 +270,7 @@ func (h *Handlers) CompleteUpload(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.Document{
 		ID:     documentID,
-		Status: "uploading",
+		Status: "indexing",
 	})
 }
 
