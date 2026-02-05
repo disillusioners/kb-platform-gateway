@@ -14,6 +14,7 @@ type Config struct {
 	Database DatabaseConfig
 	S3       S3Config
 	Temporal TemporalConfig
+	Qdrant   QdrantConfig
 	JWT      JWTConfig
 }
 
@@ -89,6 +90,12 @@ func Load() (*Config, error) {
 			Port:      getEnvAsInt("TEMPORAL_PORT", 7233),
 			Namespace: getEnv("TEMPORAL_NAMESPACE", "default"),
 		},
+
+		Qdrant: QdrantConfig{
+			Host:       getEnv("QDRANT_HOST", "qdrant"),
+			Port:       getEnvAsInt("QDRANT_PORT", 6334), // gRPC port
+			Collection: getEnv("QDRANT_COLLECTION", "documents"),
+		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "kb-platform-secret-key"),
 			Expiration: getEnvAsDuration("JWT_EXPIRATION", 24*time.Hour),
@@ -96,6 +103,12 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+type QdrantConfig struct {
+	Host       string
+	Port       int
+	Collection string
 }
 
 func getEnv(key, defaultValue string) string {

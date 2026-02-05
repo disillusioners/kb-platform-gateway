@@ -17,11 +17,12 @@ import (
 )
 
 type Handlers struct {
-	CoreClient *services.PythonCoreClient
-	S3Client   *services.S3Client
-	Temporal   *services.TemporalClient
-	Repository repository.Repository
-	Logger     zerolog.Logger
+	CoreClient   *services.PythonCoreClient
+	S3Client     *services.S3Client
+	Temporal     *services.TemporalClient
+	QdrantClient *services.QdrantClient
+	Repository   repository.Repository
+	Logger       zerolog.Logger
 }
 
 func NewHandlers(cfg *config.Config, repo repository.Repository, logger zerolog.Logger) (*Handlers, error) {
@@ -35,18 +36,27 @@ func NewHandlers(cfg *config.Config, repo repository.Repository, logger zerolog.
 		return nil, err
 	}
 
+	qdrantClient, err := services.NewQdrantClient(&cfg.Qdrant)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Handlers{
-		CoreClient: services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort),
-		S3Client:   s3Client,
-		Temporal:   temporalClient,
-		Repository: repo,
-		Logger:     logger,
+		CoreClient:   services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort),
+		S3Client:     s3Client,
+		Temporal:     temporalClient,
+		QdrantClient: qdrantClient,
+		Repository:   repo,
+		Logger:       logger,
 	}, nil
 }
 
 func (h *Handlers) Close() {
 	if h.Temporal != nil {
 		h.Temporal.Close()
+	}
+	if h.QdrantClient != nil {
+		h.QdrantClient.Close()
 	}
 }
 
@@ -235,7 +245,7 @@ func (h *Handlers) DeleteDocument(c *gin.Context) {
 		}
 	}
 
-	if err := h.CoreClient.DeleteDocumentVectors(documentID); err != nil {
+	if err := h.QdrantClient.DeleteDocumentVectors(c.Request.Context(), documentID); err != nil {
 		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to delete vectors")
 	}
 
