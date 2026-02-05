@@ -105,7 +105,7 @@ func (h *Handlers) UploadDocument(c *gin.Context) {
 		S3Key:     s3Key,
 		Filename:  file.Filename,
 		FileSize:  file.Size,
-		Status:    "pending",
+		Status:    "uploading",
 		CreatedAt: time.Now(),
 	}
 
@@ -115,6 +115,19 @@ func (h *Handlers) UploadDocument(c *gin.Context) {
 			Error: models.ErrorDetail{
 				Code:    "INTERNAL_ERROR",
 				Message: "Failed to save document",
+			},
+		})
+		return
+	}
+
+	// Start two-phase upload workflow
+	_, err = h.Temporal.StartUploadWorkflow(c.Request.Context(), documentID, s3Key)
+	if err != nil {
+		h.Logger.Error().Err(err).Msg("Failed to start upload workflow")
+		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
+			Error: models.ErrorDetail{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to start upload workflow",
 			},
 		})
 		return
@@ -243,23 +256,13 @@ func (h *Handlers) DeleteDocument(c *gin.Context) {
 func (h *Handlers) CompleteUpload(c *gin.Context) {
 	documentID := c.Param("id")
 
-	if _, err := h.Temporal.StartUploadWorkflow(c.Request.Context(), documentID, ""); err != nil {
-		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to start upload workflow")
+	// Signal upload completion to workflow
+	if err := h.Temporal.SignalUploadComplete(c.Request.Context(), documentID); err != nil {
+		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to signal upload complete")
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
 			Error: models.ErrorDetail{
 				Code:    "INTERNAL_ERROR",
-				Message: "Failed to start indexing",
-			},
-		})
-		return
-	}
-
-	if err := h.Repository.UpdateDocumentStatus(c.Request.Context(), documentID, "indexing", ""); err != nil {
-		h.Logger.Error().Err(err).Str("document_id", documentID).Msg("Failed to update document status")
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{
-			Error: models.ErrorDetail{
-				Code:    "INTERNAL_ERROR",
-				Message: "Failed to update status",
+				Message: "Failed to signal upload complete",
 			},
 		})
 		return
@@ -267,7 +270,7 @@ func (h *Handlers) CompleteUpload(c *gin.Context) {
 
 	c.JSON(http.StatusOK, models.Document{
 		ID:     documentID,
-		Status: "indexing",
+		Status: "uploading",
 	})
 }
 

@@ -52,7 +52,7 @@ type QueryWorkflowInput struct {
 func (tc *TemporalClient) StartUploadWorkflow(ctx context.Context, documentID, s3Key string) (string, error) {
 	workflowOptions := client.StartWorkflowOptions{
 		ID:        fmt.Sprintf("upload-%s", documentID),
-		TaskQueue: "upload-task-queue",
+		TaskQueue: "indexing-queue",
 	}
 
 	we, err := tc.client.ExecuteWorkflow(ctx, workflowOptions, "UploadWorkflow", UploadWorkflowInput{
@@ -73,10 +73,10 @@ func (tc *TemporalClient) SignalUploadComplete(ctx context.Context, documentID s
 func (tc *TemporalClient) StartIndexWorkflow(ctx context.Context, documentID string) (string, error) {
 	workflowOptions := client.StartWorkflowOptions{
 		ID:        fmt.Sprintf("index-%s", documentID),
-		TaskQueue: "index-task-queue",
+		TaskQueue: "indexing-queue",
 	}
 
-	we, err := tc.client.ExecuteWorkflow(ctx, workflowOptions, "IndexWorkflow", IndexWorkflowInput{
+	we, err := tc.client.ExecuteWorkflow(ctx, workflowOptions, "IndexingWorkflow", IndexWorkflowInput{
 		DocumentID: documentID,
 	})
 	if err != nil {
