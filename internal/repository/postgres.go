@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"kb-platform-gateway/internal/models"
 
 	_ "github.com/lib/pq"
+	"github.com/rs/zerolog/log"
 )
 
 type PostgresRepository struct {
@@ -51,18 +53,29 @@ type DocumentRow struct {
 	S3Key        *string
 	CreatedAt    time.Time
 	IndexedAt    *time.Time
+	Metadata     *string
 }
 
 func (r *PostgresRepository) CreateDocument(ctx context.Context, doc *models.Document) error {
 	query := `
-		INSERT INTO documents (id, filename, file_size, status, s3_key, error_message, created_at, indexed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO documents (id, filename, file_size, status, s3_key, error_message, created_at, indexed_at, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
+
+	// Convert metadata map to JSON string
+	var metadataJSON *string
+	if doc.Metadata != nil && len(doc.Metadata) > 0 {
+		if b, err := json.Marshal(doc.Metadata); err == nil {
+			s := string(b)
+			metadataJSON = &s
+		}
+	}
 
 	_, err := r.db.ExecContext(ctx, query,
 		doc.ID, doc.Filename, doc.FileSize, doc.Status,
 		nullString(doc.S3Key), nullString(doc.ErrorMessage),
 		doc.CreatedAt, nullTime(doc.IndexedAt),
+		metadataJSON,
 	)
 
 	return err
@@ -70,7 +83,7 @@ func (r *PostgresRepository) CreateDocument(ctx context.Context, doc *models.Doc
 
 func (r *PostgresRepository) GetDocument(ctx context.Context, id string) (*models.Document, error) {
 	query := `
-		SELECT id, filename, file_size, status, s3_key, error_message, created_at, indexed_at
+		SELECT id, filename, file_size, status, s3_key, error_message, created_at, indexed_at, metadata
 		FROM documents
 		WHERE id = $1
 	`
@@ -79,6 +92,7 @@ func (r *PostgresRepository) GetDocument(ctx context.Context, id string) (*model
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&row.ID, &row.Filename, &row.FileSize, &row.Status,
 		&row.S3Key, &row.ErrorMessage, &row.CreatedAt, &row.IndexedAt,
+		&row.Metadata,
 	)
 
 	if err == sql.ErrNoRows {
@@ -94,7 +108,7 @@ func (r *PostgresRepository) GetDocument(ctx context.Context, id string) (*model
 
 func (r *PostgresRepository) ListDocuments(ctx context.Context, limit, offset int, statusFilter string) ([]*models.Document, int, error) {
 	query := `
-		SELECT id, filename, file_size, status, s3_key, error_message, created_at, indexed_at
+		SELECT id, filename, file_size, status, s3_key, error_message, created_at, indexed_at, metadata
 		FROM documents
 	`
 
@@ -125,6 +139,7 @@ func (r *PostgresRepository) ListDocuments(ctx context.Context, limit, offset in
 		if err := rows.Scan(
 			&row.ID, &row.Filename, &row.FileSize, &row.Status,
 			&row.S3Key, &row.ErrorMessage, &row.CreatedAt, &row.IndexedAt,
+			&row.Metadata,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -274,29 +289,34 @@ func (r *PostgresRepository) ListConversations(ctx context.Context, userID strin
 	return conversations, total, nil
 }
 
+// UpdateMessageCount is deprecated - database trigger now handles this automatically.
+// Kept for interface compliance.
 func (r *PostgresRepository) UpdateMessageCount(ctx context.Context, id string, count int) error {
-	query := `
-		UPDATE conversations
-		SET message_count = $1, updated_at = $2
-		WHERE id = $3
-	`
-	_, err := r.db.ExecContext(ctx, query, count, time.Now(), id)
-	return err
+	return nil
 }
 
 func (r *PostgresRepository) CreateMessage(ctx context.Context, msg *models.Message) error {
 	query := `
-		INSERT INTO messages (id, conversation_id, role, content, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO messages (id, conversation_id, role, content, created_at, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`
-	_, err := r.db.ExecContext(ctx, query, msg.ID, msg.ConversationID, msg.Role, msg.Content, msg.CreatedAt)
+
+	var metadataJSON *string
+	if msg.Metadata != nil && len(msg.Metadata) > 0 {
+		if b, err := json.Marshal(msg.Metadata); err == nil {
+			s := string(b)
+			metadataJSON = &s
+		}
+	}
+
+	_, err := r.db.ExecContext(ctx, query, msg.ID, msg.ConversationID, msg.Role, msg.Content, msg.CreatedAt, metadataJSON)
 
 	return err
 }
 
 func (r *PostgresRepository) GetMessagesByConversationID(ctx context.Context, conversationID string, limit, offset int) ([]*models.Message, error) {
 	query := `
-		SELECT id, conversation_id, role, content, created_at
+		SELECT id, conversation_id, role, content, created_at, metadata
 		FROM messages
 		WHERE conversation_id = $1
 		ORDER BY created_at ASC
@@ -312,9 +332,17 @@ func (r *PostgresRepository) GetMessagesByConversationID(ctx context.Context, co
 	var messages []*models.Message
 	for rows.Next() {
 		var msg models.Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
+		var metadataJSON *string
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt, &metadataJSON); err != nil {
 			return nil, err
 		}
+
+		if metadataJSON != nil && *metadataJSON != "" {
+			if err := json.Unmarshal([]byte(*metadataJSON), &msg.Metadata); err != nil {
+				log.Error().Err(err).Str("message_id", msg.ID).Msg("Failed to parse message metadata")
+			}
+		}
+
 		messages = append(messages, &msg)
 	}
 
@@ -344,6 +372,12 @@ func rowToDocument(row *DocumentRow) *models.Document {
 	}
 	if row.IndexedAt != nil {
 		doc.IndexedAt = row.IndexedAt
+	}
+
+	if row.Metadata != nil && *row.Metadata != "" {
+		if err := json.Unmarshal([]byte(*row.Metadata), &doc.Metadata); err != nil {
+			log.Error().Err(err).Str("document_id", row.ID).Msg("Failed to parse document metadata")
+		}
 	}
 
 	return doc
