@@ -51,7 +51,7 @@ type Message struct {
 	ConversationID string            `json:"conversation_id,omitempty"`
 	Role           string            `json:"role"`
 	Content        string            `json:"content"`
-	Timestamp      time.Time         `json:"timestamp"`
+	CreatedAt      time.Time         `json:"created_at"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 

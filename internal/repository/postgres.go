@@ -194,8 +194,8 @@ type ConversationRow struct {
 
 func (r *PostgresRepository) CreateConversation(ctx context.Context, conv *models.Conversation) error {
 	query := `
-		INSERT INTO conversations (id, created_at, updated_at, message_count)
-		VALUES ($1, $2, $3, 0)
+		INSERT INTO conversations (id, created_at, updated_at)
+		VALUES ($1, $2, $3)
 	`
 
 	_, err := r.db.ExecContext(ctx, query, conv.ID, conv.CreatedAt, conv.UpdatedAt)
@@ -286,24 +286,20 @@ func (r *PostgresRepository) UpdateMessageCount(ctx context.Context, id string, 
 
 func (r *PostgresRepository) CreateMessage(ctx context.Context, msg *models.Message) error {
 	query := `
-		INSERT INTO messages (id, conversation_id, role, content, timestamp)
+		INSERT INTO messages (id, conversation_id, role, content, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`
-	_, err := r.db.ExecContext(ctx, query, msg.ID, msg.ConversationID, msg.Role, msg.Content, msg.Timestamp)
-
-	if err == nil {
-		r.UpdateMessageCount(ctx, msg.ConversationID, 1)
-	}
+	_, err := r.db.ExecContext(ctx, query, msg.ID, msg.ConversationID, msg.Role, msg.Content, msg.CreatedAt)
 
 	return err
 }
 
 func (r *PostgresRepository) GetMessagesByConversationID(ctx context.Context, conversationID string, limit, offset int) ([]*models.Message, error) {
 	query := `
-		SELECT id, conversation_id, role, content, timestamp
+		SELECT id, conversation_id, role, content, created_at
 		FROM messages
 		WHERE conversation_id = $1
-		ORDER BY timestamp ASC
+		ORDER BY created_at ASC
 		LIMIT $2 OFFSET $3
 	`
 
@@ -316,7 +312,7 @@ func (r *PostgresRepository) GetMessagesByConversationID(ctx context.Context, co
 	var messages []*models.Message
 	for rows.Next() {
 		var msg models.Message
-		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.Timestamp); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		messages = append(messages, &msg)
