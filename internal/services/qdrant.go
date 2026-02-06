@@ -36,21 +36,10 @@ func (q *QdrantClient) Close() error {
 }
 
 func (q *QdrantClient) DeleteDocumentVectors(ctx context.Context, documentID string) error {
-	// Create filter for document_id
+	// Create filter for document_id using the helper function
 	filter := &pb.Filter{
 		Must: []*pb.Condition{
-			{
-				Condition: &pb.Condition_Field{
-					Field: &pb.FieldCondition{
-						Key: "document_id",
-						Match: &pb.Match{
-							MatchValue: &pb.Match_Keyword{
-								Keyword: documentID,
-							},
-						},
-					},
-				},
-			},
+			pb.NewMatch("document_id", documentID),
 		},
 	}
 

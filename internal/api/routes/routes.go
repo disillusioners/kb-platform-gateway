@@ -4,19 +4,12 @@ import (
 	"kb-platform-gateway/internal/api/handlers"
 	"kb-platform-gateway/internal/api/middleware"
 	"kb-platform-gateway/internal/config"
-	"kb-platform-gateway/internal/repository"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
-func SetupRoutes(router *gin.Engine, cfg *config.Config, repo repository.Repository, logger zerolog.Logger) {
-	h, err := handlers.NewHandlers(cfg, repo, logger)
-	if err != nil {
-		panic(err)
-	}
-	defer h.Close()
-
+func SetupRoutes(router *gin.Engine, cfg *config.Config, h *handlers.Handlers, logger zerolog.Logger) {
 	authMiddleware := middleware.AuthMiddleware()
 
 	api := router.Group("/api/v1")

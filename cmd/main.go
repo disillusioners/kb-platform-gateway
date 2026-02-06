@@ -10,9 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"kb-platform-gateway/internal/api/handlers"
 	"kb-platform-gateway/internal/api/routes"
 	"kb-platform-gateway/internal/config"
 	"kb-platform-gateway/internal/repository"
+	"kb-platform-gateway/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -44,11 +46,40 @@ func main() {
 	}
 	defer repo.Close()
 
+	// Initialize services
+	pythonCoreClient := services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort)
+	s3Client, err := services.NewS3Client(&cfg.S3)
+	if err != nil {
+		log.Fatalf("Failed to create S3 client: %v", err)
+	}
+	temporalClient, err := services.NewTemporalClient(&cfg.Temporal)
+	if err != nil {
+		log.Fatalf("Failed to create Temporal client: %v", err)
+	}
+	qdrantClient, err := services.NewQdrantClient(&cfg.Qdrant)
+	if err != nil {
+		log.Fatalf("Failed to create Qdrant client: %v", err)
+	}
+
 	// Setup middleware
 	setupMiddleware(router, cfg, logger)
 
+	// Initialize handlers with services
+	h, err := handlers.NewHandlers(repo, pythonCoreClient, s3Client, temporalClient, qdrantClient, logger)
+	if err != nil {
+		log.Fatalf("Failed to create handlers: %v", err)
+	}
+	defer func() {
+		if temporalClient != nil {
+			temporalClient.Close()
+		}
+		if qdrantClient != nil {
+			qdrantClient.Close()
+		}
+	}()
+
 	// Setup routes
-	routes.SetupRoutes(router, cfg, repo, logger)
+	routes.SetupRoutes(router, cfg, h, logger)
 
 	// Create HTTP server
 	srv := &http.Server{

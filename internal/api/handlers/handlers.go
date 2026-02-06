@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"kb-platform-gateway/internal/config"
 	"kb-platform-gateway/internal/models"
 	"kb-platform-gateway/internal/repository"
 	"kb-platform-gateway/internal/services"
@@ -17,32 +16,17 @@ import (
 )
 
 type Handlers struct {
-	CoreClient   *services.PythonCoreClient
-	S3Client     *services.S3Client
-	Temporal     *services.TemporalClient
-	QdrantClient *services.QdrantClient
+	CoreClient   services.PythonCoreClientInterface
+	S3Client     services.S3ClientInterface
+	Temporal     services.TemporalClientInterface
+	QdrantClient services.QdrantClientInterface
 	Repository   repository.Repository
 	Logger       zerolog.Logger
 }
 
-func NewHandlers(cfg *config.Config, repo repository.Repository, logger zerolog.Logger) (*Handlers, error) {
-	s3Client, err := services.NewS3Client(&cfg.S3)
-	if err != nil {
-		return nil, err
-	}
-
-	temporalClient, err := services.NewTemporalClient(&cfg.Temporal)
-	if err != nil {
-		return nil, err
-	}
-
-	qdrantClient, err := services.NewQdrantClient(&cfg.Qdrant)
-	if err != nil {
-		return nil, err
-	}
-
+func NewHandlers(repo repository.Repository, pythonCoreClient services.PythonCoreClientInterface, s3Client services.S3ClientInterface, temporalClient services.TemporalClientInterface, qdrantClient services.QdrantClientInterface, logger zerolog.Logger) (*Handlers, error) {
 	return &Handlers{
-		CoreClient:   services.NewPythonCoreClient(cfg.Services.PythonCoreHost, cfg.Services.PythonCorePort),
+		CoreClient:   pythonCoreClient,
 		S3Client:     s3Client,
 		Temporal:     temporalClient,
 		QdrantClient: qdrantClient,
