@@ -44,6 +44,10 @@ func (r *PostgresRepository) Close() error {
 	return r.db.Close()
 }
 
+func (r *PostgresRepository) DB() *sql.DB {
+	return r.db
+}
+
 type DocumentRow struct {
 	ID           string
 	Filename     string
@@ -64,7 +68,7 @@ func (r *PostgresRepository) CreateDocument(ctx context.Context, doc *models.Doc
 
 	// Convert metadata map to JSON string
 	var metadataJSON *string
-	if doc.Metadata != nil && len(doc.Metadata) > 0 {
+	if len(doc.Metadata) > 0 {
 		if b, err := json.Marshal(doc.Metadata); err == nil {
 			s := string(b)
 			metadataJSON = &s
@@ -302,7 +306,7 @@ func (r *PostgresRepository) CreateMessage(ctx context.Context, msg *models.Mess
 	`
 
 	var metadataJSON *string
-	if msg.Metadata != nil && len(msg.Metadata) > 0 {
+	if len(msg.Metadata) > 0 {
 		if b, err := json.Marshal(msg.Metadata); err == nil {
 			s := string(b)
 			metadataJSON = &s
